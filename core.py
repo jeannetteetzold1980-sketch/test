@@ -95,7 +95,7 @@ class VoiceGenderClassifier:
         features_scaled = (features - self._mean_features) / self._std_dev_features
         z = np.dot(self._weights, features_scaled.flatten()) + self._bias
         probability = 1 / (1 + np.exp(-z))
-        return "weiblich" if probability > 0.5 else "männlich"
+        return "männlich" if probability > 0.5 else "weiblich"
 
     def calibrate(self, labeled_data):
         X, y = [], []
@@ -201,8 +201,7 @@ def process_files(
 
                 duration = len(segment) / 1000.0
                 if 2.5 < duration < 12.0 and segment.dBFS > -35.0:
-                    unique_wav_filename =
-                        f"{os.path.splitext(os.path.basename(filepath))[0]}_{j+1:03d}.wav"
+                    unique_wav_filename = f"{os.path.splitext(os.path.basename(filepath))[0]}_{j+1:03d}.wav"
                     full_wav_path = os.path.join(wavs_folder, unique_wav_filename)
                     segment.export(full_wav_path, format="wav")
                     normalized_transcript = transcribe_and_normalize(

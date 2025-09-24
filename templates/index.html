@@ -1,0 +1,78 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+    <meta charset="UTF-8">
+    <title>TTS-Toolkit</title>
+    <style>
+        body { font-family: sans-serif; margin: 2em; }
+        .container { max-width: 800px; margin: 0 auto; }
+        .logs { white-space: pre-wrap; background-color: #f4f4f4; border: 1px solid #ddd; padding: 1em; margin-top: 1em; height: 300px; overflow-y: scroll; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>TTS-Datensatz-Formatter</h1>
+        <form id="upload-form" enctype="multipart/form-data">
+            <p>
+                <label for="files">Dateien auswählen:</label>
+                <input type="file" name="files" multiple required>
+            </p>
+            <p>
+                <label>Geschlechter-Filter:</label>
+                <input type="radio" name="gender" value="alle" checked> Alle
+                <input type="radio" name="gender" value="männlich"> Männlich
+                <input type="radio" name="gender" value="weiblich"> Weiblich
+            </p>
+            <p><input type="submit" value="Verarbeitung starten"></p>
+        </form>
+        <div id="status">
+            <h2>Status</h2>
+            <div id="progress"></div>
+            <div class="logs" id="logs"></div>
+        </div>
+    </div>
+
+    <script>
+        const form = document.getElementById('upload-form');
+        const progress = document.getElementById('progress');
+        const logs = document.getElementById('logs');
+
+        form.addEventListener('submit', async (e) => {
+            e.preventDefault();
+            logs.textContent = '';
+            progress.textContent = '';
+
+            const formData = new FormData(form);
+            const response = await fetch('/upload', {
+                method: 'POST',
+                body: formData
+            });
+
+            const data = await response.json();
+            if (data.task_id) {
+                checkStatus(data.task_id);
+            }
+        });
+
+        async function checkStatus(taskId) {
+            const response = await fetch(`/status/${taskId}`);
+            const data = await response.json();
+
+            if (data.state === 'processing') {
+                progress.textContent = `Verarbeite Datei ${data.current} von ${data.total}: ${data.filename}`;
+                logs.textContent += data.log;
+                setTimeout(() => checkStatus(taskId), 1000);
+            } else if (data.state === 'complete') {
+                progress.textContent = "Verarbeitung abgeschlossen.";
+                logs.textContent += data.log;
+                if(data.zip_path) {
+                    logs.textContent += `\nDownload: <a href="/download/${data.zip_path}">${data.zip_path}</a>`;
+                }
+            } else if (data.state === 'error') {
+                progress.textContent = "Ein Fehler ist aufgetreten.";
+                logs.textContent += data.log;
+            }
+        }
+    </script>
+</body>
+</html>
