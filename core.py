@@ -87,15 +87,23 @@ class VoiceGenderClassifier:
 
     def predict(self, y, sr):
         features = self._extract_features(y, sr)
+        pitch = features[0]
+
+        # Tonhöhe ist das stärkste Merkmal für die Geschlechtsbestimmung.
+        # Durchschnittliche männliche Tonhöhe: 85-180 Hz
+        # Durchschnittliche weibliche Tonhöhe: 165-255 Hz
+        # Wir wählen einen Schwellenwert, der dazwischen liegt.
+        pitch_threshold = 165  # in Hz
 
         if self.custom_model:
+            # Behalte die Möglichkeit, ein benutzerdefiniertes Modell zu verwenden
             return self.custom_model.predict(features.reshape(1, -1))[0]
 
-        # Fallback
-        features_scaled = (features - self._mean_features) / self._std_dev_features
-        z = np.dot(self._weights, features_scaled.flatten()) + self._bias
-        probability = 1 / (1 + np.exp(-z))
-        return "männlich" if probability > 0.5 else "weiblich"
+        # Robuste, auf Tonhöhe basierende Fallback-Logik
+        if pitch > pitch_threshold:
+            return "weiblich"
+        else:
+            return "männlich"
 
     def calibrate(self, labeled_data):
         X, y = [], []
