@@ -86,10 +86,10 @@ class VoiceGenderClassifier:
         return np.hstack(([pitch], mfccs))
 
     def predict(self, y, sr):
-        features = self._extract_features(y, sr).reshape(1, -1)
+        features = self._extract_features(y, sr)
 
         if self.custom_model:
-            return self.custom_model.predict(features)[0]
+            return self.custom_model.predict(features.reshape(1, -1))[0]
 
         # Fallback
         features_scaled = (features - self._mean_features) / self._std_dev_features
