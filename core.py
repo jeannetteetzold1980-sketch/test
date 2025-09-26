@@ -6,6 +6,7 @@ import whisper
 from num2words import num2words
 import re
 from sklearn.linear_model import LogisticRegression
+from sklearn.mixture import GaussianMixture
 import os
 import datetime
 import shutil
@@ -17,111 +18,94 @@ GERMAN_INITIAL_PROMPT = (
 BASE_OUTPUT_DIR = "results"
 
 class VoiceGenderClassifier:
-    def __init__(self):
-        # Standardmodell (Fallback)
-        self._weights = np.array(
-            [
-                -1.88,
-                -0.06,
-                0.46,
-                0.14,
-                0.04,
-                -0.01,
-                0.01,
-                -0.01,
-                -0.16,
-                -0.05,
-                0.0,
-                -0.01,
-                -0.13,
-                -0.11,
-            ]
-        )
-        self._bias = 0.81
-        self._mean_features = np.array(
-            [
-                1.51e02,
-                -2.13e01,
-                2.38e01,
-                -4.13e00,
-                6.78e00,
-                -2.28e00,
-                2.65e00,
-                -2.53e00,
-                -2.07e-01,
-                -2.12e00,
-                -8.76e-01,
-                -1.13e00,
-                -1.97e00,
-                -2.87e00,
-            ]
-        )
-        self._std_dev_features = np.array(
-            [
-                4.47e01,
-                1.25e01,
-                8.87e00,
-                6.42e00,
-                5.02e00,
-                4.34e00,
-                3.82e00,
-                3.52e00,
-                3.42e00,
-                3.03e00,
-                2.94e00,
-                2.76e00,
-                2.69e00,
-                2.52e00,
-            ]
-        )
-        self.custom_model = None
+    def __init__(self, n_components=5):
+        # Initialisiere GMMs für männliche und weibliche Stimmen
+        self.male_gmm = GaussianMixture(n_components=n_components, random_state=42)
+        self.female_gmm = GaussianMixture(n_components=n_components, random_state=42)
+        self.is_fitted = False
+        self._train_default_models()
+
+    def _train_default_models(self):
+        """
+        Trainiert die GMMs mit einem einfachen, repräsentativen Datensatz,
+        um ein robustes Standardverhalten sicherzustellen.
+        """
+        # Repräsentative Merkmale für männliche und weibliche Stimmen
+        # Diese Werte simulieren typische Verteilungen für Pitch und MFCCs.
+        # Männlich: tiefere Tonhöhe, andere spektrale Eigenschaften
+        male_features = np.array([
+            [120, -15, 20, -5, 5, -2, 2, -2, 0, -2, -1, -1, -2, -3],
+            [130, -18, 22, -4, 6, -3, 3, -3, -1, -2, -1, -1, -2, -3],
+            [110, -20, 18, -6, 4, -1, 1, -1, 1, -3, -2, -2, -1, -2]
+        ] * 10) # Multipliziere, um genügend Daten für das Training zu haben
+
+        # Weiblich: höhere Tonhöhe, andere spektrale Eigenschaften
+        female_features = np.array([
+            [200, -10, 25, 0, 10, 0, 5, 0, 2, 0, 1, 1, 0, -1],
+            [210, -12, 28, 1, 12, 1, 6, 1, 3, 1, 2, 2, 1, 0],
+            [190, -8, 22, -1, 8, -1, 4, -1, 1, -1, 0, 0, -1, -2]
+        ] * 10)
+
+        try:
+            self.male_gmm.fit(male_features)
+            self.female_gmm.fit(female_features)
+            self.is_fitted = True
+            print("Standard-GMMs für Geschlechtsbestimmung erfolgreich trainiert.")
+        except Exception as e:
+            print(f"Fehler beim Trainieren der Standard-GMMs: {e}")
 
     def _extract_features(self, y, sr):
         f0, _, _ = librosa.pyin(
             y, fmin=librosa.note_to_hz("C2"), fmax=librosa.note_to_hz("C7")
         )
         valid_f0 = f0[~np.isnan(f0)]
-        pitch = np.mean(valid_f0) if len(valid_f0) > 0 else 150.0
+        # Verwende Median statt Mittelwert für mehr Robustheit
+        pitch = np.median(valid_f0) if len(valid_f0) > 0 else 150.0
         mfccs = np.mean(librosa.feature.mfcc(y=y, sr=sr, n_mfcc=13), axis=1)
         return np.hstack(([pitch], mfccs))
 
     def predict(self, y, sr):
-        features = self._extract_features(y, sr)
-        pitch = features[0]
+        if not self.is_fitted:
+            return "Modell nicht trainiert"
 
-        # Tonhöhe ist das stärkste Merkmal für die Geschlechtsbestimmung.
-        # Durchschnittliche männliche Tonhöhe: 85-180 Hz
-        # Durchschnittliche weibliche Tonhöhe: 165-255 Hz
-        # Wir wählen einen Schwellenwert, der dazwischen liegt.
-        pitch_threshold = 165  # in Hz
+        features = self._extract_features(y, sr).reshape(1, -1)
 
-        if self.custom_model:
-            # Behalte die Möglichkeit, ein benutzerdefiniertes Modell zu verwenden
-            return self.custom_model.predict(features.reshape(1, -1))[0]
+        # Berechne die Wahrscheinlichkeit für jedes Modell
+        male_score = self.male_gmm.score(features)
+        female_score = self.female_gmm.score(features)
 
-        # Robuste, auf Tonhöhe basierende Fallback-Logik
-        if pitch > pitch_threshold:
-            return "weiblich"
-        else:
-            return "männlich"
+        # Gib das Geschlecht des Modells mit der höheren Wahrscheinlichkeit zurück
+        return "weiblich" if female_score > male_score else "männlich"
 
     def calibrate(self, labeled_data):
-        X, y = [], []
-        for filepath, label in labeled_data:
-            try:
-                audio, sr = librosa.load(filepath, sr=16000, mono=True)
-                feats = self._extract_features(audio, sr)
-                X.append(feats)
-                y.append(label)
-            except Exception as e:
-                print(f"Fehler beim Laden {filepath}: {e}")
+        """
+        Trainiert die GMMs mit benutzerdefinierten, gelabelten Daten neu.
+        """
+        male_features = []
+        female_features = []
 
-        if len(X) >= 5:
-            model = LogisticRegression(max_iter=200)
-            model.fit(X, y)
-            self.custom_model = model
-            return True
-        return False
+        for file_path, label in labeled_data:
+            try:
+                y, sr = librosa.load(file_path, sr=None)
+                features = self._extract_features(y, sr)
+                if label.lower() == "männlich":
+                    male_features.append(features)
+                elif label.lower() == "weiblich":
+                    female_features.append(features)
+            except Exception as e:
+                print(f"Fehler beim Verarbeiten von {file_path} für die Kalibrierung: {e}")
+
+        if not male_features or not female_features:
+            print("Nicht genügend Daten für die Kalibrierung. Mindestens eine männliche und eine weibliche Datei erforderlich.")
+            return
+
+        try:
+            self.male_gmm.fit(np.array(male_features))
+            self.female_gmm.fit(np.array(female_features))
+            self.is_fitted = True
+            print("GMMs erfolgreich mit benutzerdefinierten Daten kalibriert.")
+        except Exception as e:
+            print(f"Fehler bei der GMM-Kalibrierung: {e}")
 
 def normalize_text(text):
     def number_to_words(match):
