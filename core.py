@@ -116,19 +116,37 @@ def normalize_text(text):
     text = re.sub(r"[^a-zäöüß\s]", "", text)
     return re.sub(r"\s+", " ", text).strip()
 
-def transcribe_and_normalize(segment_filepath, model, log_callback):
+def enhance_audio(y, sr, log_callback):
     try:
-        result = model.transcribe(
-            segment_filepath, language="de", initial_prompt=GERMAN_INITIAL_PROMPT
+        log_callback("  Verbessere Audioqualität: Reduziere Rauschen...")
+        # Konvertiere zu float32, falls es nicht schon so ist
+        if y.dtype != np.float32:
+            y = y.astype(np.float32)
+        
+        # Führe Rauschreduktion durch
+        reduced_noise_y = noisereduce.reduce_noise(y=y, sr=sr, stationary=True)
+        
+        log_callback("  Verbessere Audioqualität: Normalisiere Lautstärke...")
+        # Konvertiere zu pydub AudioSegment für die Normalisierung
+        audio_segment = AudioSegment(
+            data=(reduced_noise_y * (2**15)).astype(np.int16).tobytes(),
+            sample_width=2,
+            frame_rate=sr,
+            channels=1
         )
-        raw_transcript = result["text"].strip()
-        log_callback("  Segment transkribiert.")
-        if raw_transcript:
-            return normalize_text(raw_transcript)
-        return None
+        
+        # Normalisiere die Lautstärke auf -20 dBFS
+        normalized_segment = audio_segment.normalize()
+        
+        # Konvertiere zurück zu numpy array
+        y_normalized = np.array(normalized_segment.get_array_of_samples(), dtype=np.float32) / (2**15)
+        
+        log_callback("  Audio-Verbesserung abgeschlossen.")
+        return y_normalized, sr
     except Exception as e:
-        log_callback(f"  WARNUNG: Transkriptionsfehler: {e}")
-        return None
+        log_callback(f"  WARNUNG: Fehler bei der Audio-Verbesserung: {e}")
+        # Gib das Original-Audio zurück, wenn ein Fehler auftritt
+        return y, sr
 
 def process_files(
     filepaths,
@@ -172,40 +190,92 @@ def process_files(
                     log_callback(f"-> WIRD ÜBERSPRUNGEN (Filter: '{gender_choice}')")
                     files_skipped += 1
                     continue
+            
+            # 1. Audio verbessern
+            y_enhanced, sr_enhanced = enhance_audio(y, sr, log_callback)
 
-            audio = AudioSegment(
-                data=(y * (2**15)).astype(np.int16).tobytes(),
-                sample_width=2,
-                frame_rate=sr,
-                channels=1,
+            # 2. Transkribieren mit Wort-Zeitstempeln
+            log_callback("  Transkribiere Audio für die logische Segmentierung...")
+            try:
+                result = model.transcribe(
+                    y_enhanced,
+                    language="de",
+                    initial_prompt=GERMAN_INITIAL_PROMPT,
+                    word_timestamps=True,
+                )
+                word_segments = result.get("segments", [{"words": result.get("words")}])
+                if not word_segments or not word_segments[0].get('words'):
+                    log_callback("  WARNUNG: Keine Wörter in der Transkription gefunden. Datei wird übersprungen.")
+                    continue
+            except Exception as e:
+                log_callback(f"  FEHLER bei der Transkription für Segmentierung: {e}")
+                continue
+
+            # 3. Logische Segmente erstellen
+            log_callback("  Erstelle logische Segmente basierend auf Pausen...")
+            audio_full = AudioSegment(
+                data=(y_enhanced * (2**15)).astype(np.int16).tobytes(),
+                sample_width=2, frame_rate=sr_enhanced, channels=1
             )
-            segments = split_on_silence(
-                audio, min_silence_len=700, silence_thresh=-40, keep_silence=300
-            )
-            if not segments:
-                segments = [audio]
+            
+            current_segment_words = []
+            current_segment_start_time = word_segments[0]['words'][0]['start']
+            
+            all_words = [word for seg in word_segments for word in seg.get('words', [])]
 
-            for j, segment in enumerate(segments):
-                if stop_event.is_set():
-                    return
-                while pause_event.is_set():
-                    stop_event.wait(0.1)
+            for j in range(len(all_words) - 1):
+                word = all_words[j]
+                next_word = all_words[j+1]
+                
+                current_segment_words.append(word['word'])
+                pause_duration = next_word['start'] - word['end']
 
-                duration = len(segment) / 1000.0
-                if 2.5 < duration < 12.0 and segment.dBFS > -35.0:
-                    unique_wav_filename = f"{os.path.splitext(os.path.basename(filepath))[0]}_{j+1:03d}.wav"
-                    full_wav_path = os.path.join(wavs_folder, unique_wav_filename)
-                    segment.export(full_wav_path, format="wav")
-                    normalized_transcript = transcribe_and_normalize(
-                        full_wav_path, model, log_callback
-                    )
+                # Logische Trennung bei Pausen > 0.7s oder am Ende
+                if pause_duration > 0.7:
+                    segment_end_time = word['end']
+                    transcript_text = "".join(current_segment_words)
+                    
+                    # Segment extrahieren und verarbeiten
+                    segment_audio = audio_full[current_segment_start_time*1000:segment_end_time*1000]
+                    duration = len(segment_audio) / 1000.0
+
+                    if 2.5 < duration < 12.0 and segment_audio.dBFS > -35.0:
+                        normalized_transcript = normalize_text(transcript_text)
+                        if normalized_transcript:
+                            unique_wav_filename = f"{os.path.splitext(os.path.basename(filepath))[0]}_{total_segments_usable+1:03d}.wav"
+                            full_wav_path = os.path.join(wavs_folder, unique_wav_filename)
+                            segment_audio.export(full_wav_path, format="wav")
+                            metadata_collector.append(f"{unique_wav_filename}|{normalized_transcript}")
+                            total_segments_usable += 1
+                    
+                    # Nächstes Segment starten
+                    current_segment_words = []
+                    current_segment_start_time = next_word['start']
+
+            # Letztes Segment verarbeiten
+            if current_segment_words:
+                current_segment_words.append(all_words[-1]['word'])
+                segment_end_time = all_words[-1]['end']
+                transcript_text = "".join(current_segment_words)
+                segment_audio = audio_full[current_segment_start_time*1000:segment_end_time*1000]
+                duration = len(segment_audio) / 1000.0
+                if 2.5 < duration < 12.0 and segment_audio.dBFS > -35.0:
+                    normalized_transcript = normalize_text(transcript_text)
                     if normalized_transcript:
-                        metadata_collector.append(
-                            f"{unique_wav_filename}|{normalized_transcript}"
-                        )
+                        unique_wav_filename = f"{os.path.splitext(os.path.basename(filepath))[0]}_{total_segments_usable+1:03d}.wav"
+                        full_wav_path = os.path.join(wavs_folder, unique_wav_filename)
+                        segment_audio.export(full_wav_path, format="wav")
+                        metadata_collector.append(f"{unique_wav_filename}|{normalized_transcript}")
                         total_segments_usable += 1
-                    else:
-                        os.remove(full_wav_path)
+
+        if not metadata_collector:
+            log_callback("\nWARNUNG: Keine verwertbaren Segmente nach der Verarbeitung gefunden.")
+            return {"error": "No usable segments found."}
+
+        # Metadaten-Datei schreiben
+        with open(os.path.join(session_path, "metadata.csv"), "w", encoding="utf-8") as f:
+            for line in metadata_collector:
+                f.write(line + "\n")
 
         zip_path = shutil.make_archive(
             os.path.join(BASE_OUTPUT_DIR, session_folder), "zip", session_path
@@ -220,6 +290,7 @@ def process_files(
 
     except Exception:
         error_details = traceback.format_exc()
+        log_callback(f"\nFATALER FEHLER: {error_details}")
         return {"error": error_details}
     finally:
         if stop_event.is_set() and session_path and os.path.exists(session_path):

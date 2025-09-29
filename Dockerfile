@@ -5,18 +5,20 @@ FROM python:3.12-slim as builder
 WORKDIR /app
 
 # Installiere notwendige Build-Tools und Whisper-Abhängigkeiten
-RUN apt-get update && apt-get install -y --no-install-recommends 
-    build-essential 
-    ffmpeg 
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    build-essential \
+    ffmpeg \
     && rm -rf /var/lib/apt/lists/*
 
 # Installiere Python-Abhängigkeiten
 COPY requirements.txt .
+
+# Installiere torch explizit als CPU-Version, dann die restlichen Abhängigkeiten
+RUN pip install --no-cache-dir torch --index-url https://download.pytorch.org/whl/cpu
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Lade das Whisper-Modell herunter und cache es
-# Dies ist der zeitaufwändigste Schritt.
-RUN python -c "import whisper; whisper.load_model('large-v3')"
+# Lade das kleine Whisper-Modell herunter und cache es
+RUN python -c "import whisper; whisper.load_model('base')"
 
 # Stage 2: Finale, schlanke Ausführungs-Stage
 FROM python:3.12-slim
@@ -25,8 +27,8 @@ FROM python:3.12-slim
 WORKDIR /app
 
 # Installiere nur die notwendigen Laufzeit-Abhängigkeiten
-RUN apt-get update && apt-get install -y --no-install-recommends 
-    ffmpeg 
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    ffmpeg \
     && rm -rf /var/lib/apt/lists/*
 
 # Kopiere die installierten Python-Pakete aus der Build-Stage

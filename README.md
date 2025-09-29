@@ -1,6 +1,20 @@
-# TTS Datensatz Formatter (Docker-Version)
+# Intelligenter TTS-Datensatz-Prozessor
 
-Dieses Tool verarbeitet einen Ordner mit Audiodateien, filtert sie nach Qualität und Geschlecht und erstellt einen perfekt formatierten Datensatz für das Training mit Coqui TTS.
+Dieses Tool automatisiert die Erstellung hochwertiger DatensÃ¤tze fÃ¼r das Training von Text-to-Speech (TTS)-Modellen wie Coqui TTS. Es durchlÃ¤uft einen mehrstufigen Prozess, um aus rohen Audiodateien saubere, segmentierte und transkribierte Daten zu generieren.
+
+## Verarbeitungsschritte
+
+Der Prozess ist darauf ausgelegt, die bestmÃ¶gliche DatenqualitÃ¤t zu gewÃ¤hrleisten:
+
+1.  **Geschlechtserkennung:** Zuerst wird das Geschlecht der sprechenden Person (mÃ¤nnlich/weiblich) in jeder Audiodatei identifiziert. Dies ermÃ¶glicht die Erstellung geschlechtsspezifischer DatensÃ¤tze und die Filterung nach Wunsch.
+
+2.  **QualitÃ¤tsanalyse und -verbesserung:** AnschlieÃŸend wird die AudioqualitÃ¤t bewertet. Das Tool versucht, hÃ¤ufige Probleme wie HintergrundgerÃ¤usche oder geringe LautstÃ¤rke zu erkennen und automatisch zu korrigieren, um die Klarheit der Stimme zu verbessern.
+
+3.  **Intelligente Segmentierung:** Anstatt die Audiodateien in feste Zeitabschnitte zu zerlegen, segmentiert das Tool die Aufnahmen basierend auf natÃ¼rlichen Sprechpausen und Satzenden. Dadurch wird sichergestellt, dass SÃ¤tze und Gedanken logisch zusammenhÃ¤ngen und nicht abrupt abgeschnitten werden.
+
+4.  **Transkription:** Jedes einzelne logische Segment wird mithilfe des leistungsstarken Whisper-Modells von OpenAI prÃ¤zise transkribiert.
+
+5.  **TTS-konforme Ausgabe:** Zum Schluss werden die Audio-Segmente zusammen mit ihren Transkriptionen in einem Format gespeichert, das den Anforderungen von Coqui TTS entspricht (typischerweise eine `metadata.csv`-Datei und ein Ordner mit `.wav`-Dateien).
 
 ## Voraussetzungen
 
@@ -8,30 +22,31 @@ Dieses Tool verarbeitet einen Ordner mit Audiodateien, filtert sie nach Qualität
 
 ## 1. Bau des Docker-Images
 
-Öffne eine Kommandozeile (Terminal) in diesem Projektverzeichnis und führe den folgenden Befehl aus. Der Name `tts-formatter` ist frei wählbar. Der Build-Prozess wird einige Zeit dauern, da das große Whisper-Modell heruntergeladen wird.
+Ã–ffne eine Kommandozeile (Terminal) in diesem Projektverzeichnis und fÃ¼hre den folgenden Befehl aus. Der Name `tts-formatter` ist frei wÃ¤hlbar. Der Build-Prozess wird einige Zeit dauern, da das groÃŸe Whisper-Modell heruntergeladen wird.
 
 ```bash
-docker build -t tts-formatter .```
+docker build -t tts-formatter .
+```
 
-## 2. Ausführung des Containers
+## 2. AusfÃ¼hrung des Containers
 
 Um das Tool zu verwenden, musst du deine lokalen Ordner mit den Ordnern im Container verbinden.
 
-### Standard-Ausführung (verarbeitet alle Geschlechter)
+### Standard-AusfÃ¼hrung (verarbeitet alle Geschlechter)
 
-Erstelle auf deinem Computer einen Ordner für die Eingabe-Audiodateien (z.B. `C:\Audio\Input`) und einen für die Ausgabe (z.B. `C:\Audio\Output`).
+Erstelle auf deinem Computer einen Ordner fÃ¼r die Eingabe-Audiodateien (z.B. `C:\Audio\Input`) und einen fÃ¼r die Ausgabe (z.B. `C:\Audio\Output`).
 
 ```bash
 docker run --rm -v "C:\Audio\Input":/app/input -v "C:\Audio\Output":/app/output tts-formatter
 ```
 
-### Ausführung mit Gender-Filter
+### AusfÃ¼hrung mit Gender-Filter
 
-Um nur männliche oder weibliche Stimmen zu verarbeiten, füge einfach das `--gender` Flag am Ende des Befehls hinzu:
+Um nur mÃ¤nnliche oder weibliche Stimmen zu verarbeiten, fÃ¼ge einfach das `--gender` Flag am Ende des Befehls hinzu:
 
-**Nur männliche Stimmen:**
+**Nur mÃ¤nnliche Stimmen:**
 ```bash
-docker run --rm -v "C:\Audio\Input":/app/input -v "C:\Audio\Output":/app/output tts-formatter python main_cli.py /app/input /app/output --gender männlich
+docker run --rm -v "C:\Audio\Input":/app/input -v "C:\Audio\Output":/app/output tts-formatter python main_cli.py /app/input /app/output --gender mÃ¤nnlich
 ```
 
 **Nur weibliche Stimmen:**
@@ -41,6 +56,6 @@ docker run --rm -v "C:\Audio\Input":/app/input -v "C:\Audio\Output":/app/output 
 
 ---
 **Hinweise zu den Befehlen:**
-- `--rm`: Löscht den Container automatisch nach der Ausführung, um Müll zu vermeiden.
-- `-v "DEIN_PFAD":/app/input`: Verbindet (`-v` für Volume) deinen lokalen Ordner mit dem `/app/input`-Ordner *innerhalb* des Containers.
+- `--rm`: LÃ¶scht den Container automatisch nach der AusfÃ¼hrung, um MÃ¼ll zu vermeiden.
+- `-v "DEIN_PFAD":/app/input`: Verbindet (`-v` fÃ¼r Volume) deinen lokalen Ordner mit dem `/app/input`-Ordner *innerhalb* des Containers.
 - `tts-formatter`: Der Name des Images, das du in Schritt 1 gebaut hast.
